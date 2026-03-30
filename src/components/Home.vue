@@ -129,10 +129,6 @@ export default {
     VueSpinner,
   },
   async mounted() {
-    await this.handleGroupData();
-    await this.handleClusterData();
-    var clusters = await this.handleClusters("");
-    var sessions = await this.handleSessions("");
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
     this.map = new mapboxgl.Map({
       container: "map",
@@ -142,31 +138,42 @@ export default {
       minZoom: 1.8,
     });
 
-    // Change water color to blue
     let myMap = this.map;
     myMap.on("style.load", function () {
       myMap.setPaintProperty("water", "fill-color", "#CEEAF2");
     });
 
-    // Hide the Mapbox logo
     const logoContainer = document.querySelector(".mapboxgl-ctrl-logo");
-    if (logoContainer) {
-      logoContainer.style.display = "none";
-    }
+    if (logoContainer) logoContainer.style.display = "none";
     const attrib = document.querySelector(".mapboxgl-ctrl.mapboxgl-ctrl-attrib");
-    if (attrib) {
-      attrib.style.display = "none";
-    }
+    if (attrib) attrib.style.display = "none";
+
     const nav = new mapboxgl.NavigationControl();
     this.map.addControl(nav, "bottom-right");
 
+    try {
+      this.map.setProjection("mercator");
+    } catch (e) {
+      console.log("Projection not supported in this version");
+    }
+
+    // Load sidebar data in background — no await
     this.handleData();
     this.handleProfiles();
 
-    this.map.on("load", () => {
+    // Wait for map to be ready, THEN fetch and show clusters
+    this.map.on("load", async () => {
+      // Step 1: Fetch clusters directly and show immediately — no dependency on handleClusterData
+      const clusters = await this.handleClusters("");
       this.showClusters(clusters);
 
-      // inspect a cluster on click
+      // Step 2: Load group and cluster data in background AFTER map is visible
+      this.handleGroupData();
+      this.handleClusterData();
+      const sessions = await this.handleSessions("");
+
+      // ---- ALL EXISTING map.on() handlers below EXACTLY as they were ----
+
       this.map.on("click", "clusters", (e) => {
         const features = this.map.queryRenderedFeatures(e.point, {
           layers: ["clusters"],
@@ -193,7 +200,6 @@ export default {
         if (features.length > 0) {
           var clusterId = features[0].properties.cluster_id;
           let clusterPointCount = features[0].properties.point_count;
-
           let map = this.map;
           var allPointsInCluster = [];
 
@@ -203,22 +209,16 @@ export default {
                 .getSource("earthquakes")
                 .getClusterChildren(subClusterId, function (err, features) {
                   if (err) return callback(err);
-
                   features.forEach(async function (feature) {
                     if (feature.properties.cluster) {
-                      // If it's another cluster, recursively query its children
                       await querySubCluster(feature.properties.cluster_id);
                     } else {
-                      // If it's a point, add it to the list
                       allPointsInCluster.push(feature);
                     }
                   });
-
                   if (features.length === 0) {
-                    // No more features in the current sub-cluster, callback with the result
                     callback(null, allPointsInCluster);
                   }
-
                   if (allPointsInCluster.length === clusterPointCount) {
                     let subPropObj = {};
                     allPointsInCluster.forEach(function (sub) {
@@ -228,31 +228,21 @@ export default {
                         subPropObj[sub.properties.organization] += 1;
                       }
                     });
-
                     let nodesCount = "";
                     for (const [key, value] of Object.entries(subPropObj)) {
                       nodesCount += `<p>${key}: ${value}</p>`;
                     }
-
                     popup
                       .setLngLat(features[0].geometry.coordinates)
-                      .setHTML(
-                        `<h5>Cluster nodes: ${clusterPointCount}</h5> ${nodesCount}`
-                      )
+                      .setHTML(`<h5>Cluster nodes: ${clusterPointCount}</h5> ${nodesCount}`)
                       .setLngLat(features[0].geometry.coordinates)
                       .addTo(map);
                   }
                 });
             }
-            // Start the recursive query
             await querySubCluster(clusterId);
           }
-
-          // Call the recursive function to get all sub-child points
-          await getAllSubChildPoints(
-            clusterId,
-            function (err, subChildPoints) { }
-          );
+          await getAllSubChildPoints(clusterId, function (err, subChildPoints) {});
         }
       });
 
@@ -264,14 +254,9 @@ export default {
         this.map.getCanvas().style.cursor = "pointer";
         const markerId = e.features[0].properties.id;
         const agentLinks = await this.handleAgentlinks(markerId);
-
         const popupElement = document.getElementById("no-connections-popup");
         const loader = document.getElementById("loader");
-
-        // Show the loader while waiting for the asynchronous action
         loader.style.display = "block";
-
-        // Hide the loader and show the popup (if needed) after 2 seconds
         setTimeout(() => {
           loader.style.display = "none";
           if (agentLinks.length === 0) {
@@ -295,28 +280,17 @@ export default {
         this.map.getCanvas().style.cursor = "";
       });
 
-      // When a marker is clicked, call displayConnections
       this.map.on("click", "markers", (e) => {
         const markerCoordinates = e.features[0].geometry.coordinates;
         const markerId = e.features[0].properties.id;
-
-        // Find connections for the clicked marker using markerId
         const connections = sessions.filter(
           (session) => session.from === markerId
         );
-
         if (connections.length > 0) {
-          // If there are connections, display them
           this.displayConnections(markerCoordinates, connections);
         }
       });
     });
-    // this.map.setProjection("Mercator");
-    try {
-      this.map.setProjection('mercator');
-    } catch (e) {
-      console.log("Projection not supported in this version");
-    }
   },
   methods: {
     async handleProfileToggle(profileId, profileName) {
@@ -349,7 +323,7 @@ export default {
           if (isProfile) {
             lineFeature.properties.color = line.properties[profileName];
           } else if (Object.keys(profileSwitchesData).length < 1) {
-            lineFeature.properties.color = "grey";
+            lineFeature.properties.color = "#8cb63d";
           }
           map.getSource(sourceId).setData(groupGeoJson[layer]);
         });
@@ -471,13 +445,8 @@ export default {
     async handleData() {
       try {
         this.loading = true;
-        const [groupResponse, clusterResponse] = await Promise.all([
-          fetchGroups(),
-          fetchClustersData(),
-        ]);
+        const groupResponse = await fetchGroups();
         this.groups = groupResponse;
-        this.clusterdata = clusterResponse;
-
       } catch (error) {
         console.error("Error fetching data:", error);
       } finally {
@@ -704,7 +673,10 @@ export default {
               type: "LineString",
               coordinates: cur,
             },
-            properties: line["properties"],
+            properties: {
+              ...line["properties"],
+              color: line["properties"]["color"] || line["properties"]["grey"] || "#8cb63d",
+            },
           };
           lineFeatures.push(obj);
           checkLineIds.push(line["properties"]["session_id"]);
@@ -838,6 +810,7 @@ export default {
   height: 91%;
   position: absolute;
   margin-top: 6px;
+  background-color: #e8e0d8;
 }
 
 .popup {
