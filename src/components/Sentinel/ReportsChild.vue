@@ -185,7 +185,7 @@ import {
 } from '../../../src/services/sessions_services';
 import { getSessionsDetails } from '../../services/agents_reports_services'
 import { PerfectScrollbar } from 'vue3-perfect-scrollbar'
-import 'vue3-perfect-scrollbar/dist/style.css'
+import 'vue3-perfect-scrollbar/dist/vue3-perfect-scrollbar.css'
 import { VueSpinner } from 'vue3-spinners';
 import moment from 'moment'
 import Toast from '../Toast';
